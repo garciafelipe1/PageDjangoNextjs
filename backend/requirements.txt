@@ -14,3 +14,6 @@ django-redis==5.4.0
 whitenoise==6.8.2
 
 psycopg2==2.9.4
+
+celery==5.4.0
+django-celery-results==2.5.1

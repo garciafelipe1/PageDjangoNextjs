@@ -40,6 +40,7 @@ THIRD_PARTY_APPS = [
     "channels",
     "ckeditor",
     "ckeditor_uploader",
+    'django_celery_results'
 ]
 
 INSTALLED_APPS = DJANGO_APPS + PROJECT_APPS + THIRD_PARTY_APPS
@@ -151,7 +152,7 @@ REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
     # or allow read-only access for unauthenticated users.
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly'
+        'rest_framework.permissions.AllowAny'
     ]
 }
 
@@ -181,3 +182,22 @@ CHANNELS_ALLOWED_ORIGINS = [
 ]
 
 
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = "America/Argentina/Buenos_Aires"
+
+CELERY_BROKER_URL = env("REDIS_URL")
+
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,
+    'socket_timeout': 5,
+    'retry_on_timeout': True
+}
+
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_CACHE_BACKEND = 'default'
+
+CELERY_IMPORTS = (
+    'core.tasks',
+)

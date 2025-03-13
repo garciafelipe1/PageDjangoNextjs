@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category,Post,Heading
+from .models import Category,Post,Heading,PostAnalytics
 
 
 @admin.register(Category)
@@ -61,4 +61,13 @@ class PostAdmin(admin.ModelAdmin):
 #     prepopulated_fields=({"slug":("title",)})
     
 
-
+@admin.register(PostAnalytics)
+class PostAnalyticsAdmin(admin.ModelAdmin):
+    list_display=('post_title','views','impressions','clicks','click_through_rate','avg_time_on_page')
+    search_fields=('post__title',)
+    readonly_fields=('views','impressions','clicks','click_through_rate','avg_time_on_page')
+    
+    def post_title(self,obj):
+        return obj.post.title
+    
+    post_title.short_description='Post title'
