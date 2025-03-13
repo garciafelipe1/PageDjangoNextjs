@@ -1,0 +1,31 @@
+services:
+  back:
+    build: .
+    container_name: django
+    command: uvicorn core.asgi:application --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - django_redis
+  
+  django_redis:
+    image: redis
+    container_name: django_redis
+    ports:
+      - "6379:6379"
+  
+  django_db:
+    image: postgres
+    container_name: postgresql
+    restart: always
+    environment:
+      POSTGRES_DB: django_db
+      POSTGRES_USER: django
+      POSTGRES_PASSWORD: postgres
+      
+    ports:
+      - "5432:5432"
+    volumes:
+      - .dbdata:/var/lib/postgresql
