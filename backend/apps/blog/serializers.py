@@ -15,9 +15,16 @@ class CategoryListSerializer(serializers.ModelSerializer):
         model = Category
         fields = [
             "name",
-            "slug"
+            "slug",
+            "children",
+            # "thumbnail"
         ]
-
+    def get_children(self, obj):
+        # Obtener las categorías hijas de la categoría actual
+        children = Category.objects.filter(parent=obj)
+        return CategorySerializer(children, many=True).data
+    
+    
 class HeadingSerializer(serializers.ModelSerializer):
     class Meta:
         model=Heading
@@ -44,7 +51,7 @@ class PostSerializer(serializers.ModelSerializer):
         fields= "__all__"
     
     def get_view_count(self,obj):
-        return obj.post_view.count()
+        return obj.post_analytics.views if obj.post_analytics else 0
  
 class PostListSerializer(serializers.ModelSerializer):
     category=CategorySerializer()
@@ -63,7 +70,7 @@ class PostListSerializer(serializers.ModelSerializer):
             "view_count"
         ]
     def get_view_count(self,obj):
-        return obj.post_view.count()
+        return obj.post_analytics.views if obj.post_analytics else 0
         
 
 

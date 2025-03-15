@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category,Post,Heading,PostAnalytics
+from .models import Category,Post,Heading,PostAnalytics,CategoryAnalytics
 from django.utils.html import format_html
 
 @admin.register(Category)
@@ -9,6 +9,18 @@ class CategoryAdmin(admin.ModelAdmin):
     prepopulated_fields = {"slug": ("name",)}
     list_filter = ("parent",)
     ordering=("name",)
+
+@admin.register(CategoryAnalytics)
+class CategoryAnalyticsAdmin(admin.ModelAdmin):
+    list_display=('category_name','views','impressions','clicks','click_through_rate','avg_time_on_page')
+    search_fields=('category__name',)
+    readonly_fields=('category','views','impressions','clicks','click_through_rate','avg_time_on_page')
+    
+    def category_name(self,obj):
+        return obj.category.name
+    
+    category_name.short_description='Category Name'
+    
 
 
 class HeadingInline(admin.TabularInline):
@@ -80,4 +92,6 @@ class PostAnalyticsAdmin(admin.ModelAdmin):
         return obj.post.title
     
     post_title.short_description='Post title'
-    
+
+
+

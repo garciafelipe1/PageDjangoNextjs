@@ -2,7 +2,7 @@ from celery  import shared_task
 import redis
 import logging
 
-from .models import PostAnalytics,Post
+from .models import PostAnalytics,Post,CategoryAnalytics
 from django.conf import settings
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,25 @@ def sync_impressions_to_db():
         except Exception as e:
             print(f"error incrementing impressions for post ID {key} : {str(e)}")
 
+
+@shared_task
+def sync_category_impressions_to_db():
+    
+    keys = redis_client.keys("category:impressions:*")
+    for key in keys:
+        try:
+            category_id = key.decode("utf-8").split(":")[-1]
+            impressions=int(redis_client.get(key))
+            
+            analytics, _ = CategoryAnalytics.objects.get_or_create(category__id=category_id)
+            analytics.impressions += impressions
+            analytics.save()
+            
+            analytics._update_click_through_rate()
+            
+            redis_client.delete(key)
+        except Exception as e:
+            print(f"error incrementing impressions for post ID {key} : {str(e)}")
 
 
         

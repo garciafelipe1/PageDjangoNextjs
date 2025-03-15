@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Post,Heading,PostAnalytics,Category
-from .serializers import PostSerializer,PostListSerializer,HeadingSerializer
+from .serializers import PostSerializer,PostListSerializer,HeadingSerializer,CategorySerializer
 from .utils import get_client_ip
 from .tasks import increment_post_views_task
 
@@ -18,17 +18,31 @@ from faker import Faker
 import random
 import uuid
 from django.utils.text import slugify
-
+from rest_framework.pagination import PageNumberPagination
 
 redis_client=redis.Redis(host=settings.REDIS_HOST,port=6379,db=0)
 
-class PostListView(APIView):  # Usa APIView si StandardAPIView no es crucial
-    
+class PostPagination(PageNumberPagination):
+    page_size = 10  
+    page_size_query_param = 'page_size'
+    max_page_size = 50  
+
+
+class PostListView(APIView):
+
     def get(self, request, *args, **kwargs):
         try:
             search = request.query_params.get("search", "").strip()
-            sort = request.query_params.get("sort", "created_at")  # Orden por defecto
-            sort_order = request.query_params.get("order", "desc")  # 'asc' o 'desc'
+            sort = request.query_params.get("sort", "created_at")
+            sort_order = request.query_params.get("order", "desc")
+            categories = request.query_params.getlist("category", [])
+            page = request.query_params.get('page', '1')
+
+            # Validar que la página es un número válido
+            try:
+                page = int(page)
+            except ValueError:
+                return Response({"detail": "Invalid page number"}, status=400)
 
             valid_sort_fields = {"title", "created_at"}
             if sort not in valid_sort_fields:
@@ -36,42 +50,43 @@ class PostListView(APIView):  # Usa APIView si StandardAPIView no es crucial
 
             sort = f"-{sort}" if sort_order == "desc" else sort
 
-            print("Search term:", search)
-            print("Sorting by:", sort)
+            cache_key = f"post_list:{search}:{sort}:{','.join(categories)}:page_{page}"
+            cached_data = cache.get(cache_key)
 
-            cache_key = f"post_list:{search}:{sort}"
-            cached_posts_data = cache.get(cache_key)
-
-            if cached_posts_data:
-                for post_data in cached_posts_data:
-                    try:
-                        post_id = int(post_data["id"])
-                        redis_client.incr(f"post:impressions:{post_id}")
-                    except ValueError:
-                        print(f"Error: No se pudo convertir '{post_data['id']}' a entero.")
-                
-                return Response(cached_posts_data, status=200)
+            # Si hay datos en caché, devolver toda la respuesta (incluyendo paginación)
+            if cached_data:
+                return Response(cached_data, status=200)
 
             posts = Post.postobjects.all()
+
             if search:
-                posts = posts.filter(
-                    Q(title__icontains=search) |
-                    Q(description__icontains=search)
-                )
+                posts = posts.filter(Q(title__icontains=search) | Q(description__icontains=search))
+
+            if categories:
+                posts = posts.filter(category__name__in=categories).distinct()
 
             posts = posts.order_by(sort)
 
             if not posts.exists():
                 raise NotFound(detail="No posts found")
 
-            serializer_posts = PostListSerializer(posts, many=True).data
+            # Aplicar paginación
+            paginator = PostPagination()
+            paginated_posts = paginator.paginate_queryset(posts, request, view=self)
 
-            cache.set(cache_key, serializer_posts, timeout=60 * 5)
+            if paginated_posts is None:
+                raise NotFound(detail="Pagination error")
 
-            for post in posts:
-                redis_client.incr(f"post:impressions:{post.id}")
+            # Serializar los datos
+            serializer_posts = PostListSerializer(paginated_posts, many=True).data
 
-            return Response(serializer_posts, status=200)
+            # Obtener la respuesta paginada
+            paginated_response = paginator.get_paginated_response(serializer_posts)
+
+            # Guardar la respuesta completa en caché
+            cache.set(cache_key, paginated_response.data, timeout=60 * 5)
+
+            return paginated_response
 
         except NotFound as nf:
             return Response({"detail": str(nf)}, status=404)
@@ -115,7 +130,7 @@ class PostHeadingsView(APIView):
         post_slug=request.query_params.get("slug")
         heading_objects=Heading.objects.filter(post__slug=post_slug)
         serializer_data=HeadingSerializer(heading_objects,many=True).data
-        return self.response(serializer_data)
+        return Response(serializer_data)
     # def get_queryset(self):
     #     post_slug=self.kwargs['slug']
     #     return Heading.objects.filter(post__slug=post_slug)
@@ -142,64 +157,92 @@ class IncrementPostView(APIView):
             "message":"click incremeted successfuly",
             "clicks":post_analytics.clicks             
         })
-        
 
-# class GenerateFakePostView(StandardAPIView):
+class CategoryListView(APIView):
+    def get(self, request, *args, **kwargs):
+        try:
+            cache_key = "category_list_with_children"
+            cached_data = cache.get(cache_key)
+
+            if cached_data:
+                return Response(cached_data, status=200)
+
+            categories = Category.objects.filter(parent__isnull=True)
+            print(f"Root categories: {categories}")  # Debugging
+
+            if not categories.exists():
+                raise NotFound(detail="No categories found")
+
+            serialized_categories = CategorySerializer(categories, many=True).data
+            print(f"Serialized categories: {serialized_categories}") #debugging.
+
+            for category in Category.objects.all():
+                redis_client.incr(f"category:{category.id}")
+
+            cache.set(cache_key, serialized_categories, timeout=60 * 5)
+
+            return Response(serialized_categories, status=200)
+
+        except NotFound as nf:
+            return Response({"detail": str(nf)}, status=404)
+        except Exception as e:
+            return Response({"detail": f"Internal server error: {str(e)}"}, status=500)
+class GenerateFakePostView(StandardAPIView):
     
-#     def get(self,request):
-#         fake = Faker()
+    def get(self,request):
+        fake = Faker()
         
-#         categories = list(Category.objects.all())
+        categories = list(Category.objects.all())
         
-#         if not categories:
-#             return self.response("No categories found",400)
+        if not categories:
+            return self.response("No categories found",400)
         
-#         posts_to_generate=100
-#         status_options = ["draft", "published"]
+        posts_to_generate=100
+        status_options = ["draft", "published"]
         
-#         for _ in range(posts_to_generate):
-#             title = fake.sentence(nb_words=6)
-#             post = Post(
-#                 id=uuid.uuid4(),
-#                 title = title,
-#                 description= fake.sentence(nb_words=12),
-#                 content=fake.paragraph(nb_sentences=5),
-#                 keywords=", ".join(fake.words(nb=5)),
-#                 slug = slugify(title),
-#                 category=random.choice(categories),
-#                 status=random.choice(status_options),
-#             )
-#             post.save()
+        for _ in range(posts_to_generate):
+            title = fake.sentence(nb_words=6)
+            post = Post(
+                id=uuid.uuid4(),
+                title = title,
+                description= fake.sentence(nb_words=12),
+                content=fake.paragraph(nb_sentences=5),
+                keywords=", ".join(fake.words(nb=5)),
+                slug = slugify(title),
+                category=random.choice(categories),
+                status=random.choice(status_options),
+            )
+            post.save()
             
-#         return self.response(f"{posts_to_generate} post generados correctamente")
+        return self.response(f"{posts_to_generate} post generados correctamente")
     
-# class GenerateFakeAnalyticsView(StandardAPIView):
+class GenerateFakeAnalyticsView(StandardAPIView):
     
-#     def get(self,request):
+    def get(self,request):
         
-#         fake=Faker()
+        fake=Faker()
         
         
-#         posts = Post.objects.all()
+        posts = Post.objects.all()
         
-#         if not posts:
-#             return self.response({"error":"No posts found"},status=400)
+        if not posts:
+            return self.response({"error":"No posts found"},status=400)
         
-#         analytics_to_generate=len(posts)
+        analytics_to_generate=len(posts)
         
-#         for post in posts:
-#             views=random.randint(50,1000)
-#             impressions = views + random.randint(100,2000)
-#             clicks=random.randint(0, views)
-#             avg_time_on_page=round(random.uniform(10,300),2)
+        for post in posts:
+            views=random.randint(50,1000)
+            impressions = views + random.randint(100,2000)
+            clicks=random.randint(0, views)
+            avg_time_on_page=round(random.uniform(10,300),2)
             
             
-#             analytics, created=PostAnalytics.objects.get_or_create(post=post)
-#             analytics.views=views
-#             analytics.impressions = impressions
-#             analytics.clicks = clicks
-#             analytics.avg_time_on_page = avg_time_on_page
-#             analytics._update_click_through_rate()
-#             analytics.save()
+            analytics, created=PostAnalytics.objects.get_or_create(post=post)
+            analytics.views=views
+            analytics.impressions = impressions
+            analytics.clicks = clicks
+            analytics.avg_time_on_page = avg_time_on_page
+            analytics._update_click_through_rate()
+            analytics.save()
             
-#         return self.response({"message":f"analiticas generadas para {analytics_to_generate} posts"}) 
+        return self.response({"message":f"analiticas generadas para {analytics_to_generate} posts"}) 
