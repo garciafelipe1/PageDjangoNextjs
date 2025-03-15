@@ -4,14 +4,17 @@ from .views import(
     PostListView,
     PostDetailView,
     IncrementPostView,
-    PostHeadingsView
+    PostHeadingsView,
+    # GenerateFakeAnalyticsView,
+    # GenerateFakePostView
     ) 
 
 urlpatterns = [
     path('posts/', PostListView.as_view(), name="post-list"),
-    path('post/<slug>/', PostDetailView.as_view(), name="post-detail"),
+    path('post/', PostDetailView.as_view(), name="post-detail"),
     path('posts/increment_clicks/', IncrementPostView.as_view(), name="increment-post-click"),
-    path('post/<slug>/headings/', PostHeadingsView.as_view(), name="post-headings"),
-    
+    path('post/headings/', PostHeadingsView.as_view(), name="post-headings"),
+    # path('generate_post/', GenerateFakePostView.as_view()),
+    # path('generate_analytics/', GenerateFakeAnalyticsView.as_view()),
     
 ]

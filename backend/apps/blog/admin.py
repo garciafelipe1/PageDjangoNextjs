@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import Category,Post,Heading,PostAnalytics
-
+from django.utils.html import format_html
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -18,11 +18,14 @@ class HeadingInline(admin.TabularInline):
     prepopulated_fields={"slug":("title",)}
     ordering=('order',)
 
-
+# class MediaInline(admin.TabularInline):
+#     model=Post.media
+#     fields=('media',)
+#     extra=1
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display=('title','status','category','created_at','update_at')
+    list_display=('title','status','category','created_at','update_at','mostrar_thumbnail')
     search_fields=('title','description','content','keywords','slug')
     prepopulated_fields = {"slug": ("title",)}
     list_filter=('status','category','update_at')
@@ -50,7 +53,13 @@ class PostAdmin(admin.ModelAdmin):
         })
     )
     inlines=[HeadingInline]
+    def mostrar_thumbnail(self, obj):
+        if obj.thumbnail:
+            return format_html('<img src="{}" width="150px"; height="auto;" />', obj.thumbnail.url)
+        else:
+            return "No Thumbnail"
 
+    mostrar_thumbnail.short_description = 'Thumbnail'
 
 # @admin.register(Heading)
 # class HeadingAdmin(admin.ModelAdmin):
@@ -71,3 +80,4 @@ class PostAnalyticsAdmin(admin.ModelAdmin):
         return obj.post.title
     
     post_title.short_description='Post title'
+    

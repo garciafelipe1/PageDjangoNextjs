@@ -69,7 +69,7 @@ class Post(models.Model):
     def __str__(self):
         return self.title
  
- 
+    
  
  
 class PostView(models.Model):
@@ -90,18 +90,18 @@ class PostAnalytics(models.Model):
     click_through_rate=models.FloatField(default=0)
     avg_time_on_page=models.FloatField(default=0)
     
+    def _update_click_through_rate(self):
+        if self.impressions > 0:
+            self.click_through_rate = (self.clicks / self.impressions) * 100
+        else:
+            self.click_through_rate = 0
+        self.save()
+    
     def increment_clicks(self):
         self.clicks += 1
         self.save()
         self._update_click_through_rate()
-        
-    
-    def _update_click_through_rate(self):
-        if self.impressions > 0:
-            self.click_through_rate = (self.clicks / self.impressions) * 100
-            self.save()
-            
-        
+
     
     def increment_impressions(self):
         self.impressions += 1
@@ -109,9 +109,7 @@ class PostAnalytics(models.Model):
         self._update_click_through_rate()
         
         
-    def increment_views(self,request):
-        ip_address=get_client_ip(request)
-        
+    def increment_view(self,ip_address):
         if not PostView.objects.filter(post=self.post,ip_address=ip_address).exists():
             PostView.objects.create(post=self.post,ip_address=ip_address)
             
