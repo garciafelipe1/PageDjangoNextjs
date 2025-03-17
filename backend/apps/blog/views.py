@@ -1,19 +1,17 @@
 from rest_framework_api.views import StandardAPIView
 from rest_framework.exceptions import NotFound,APIException
 from django.conf import settings
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
 from django.core.cache import cache
 from django.db.models import Q
 import redis
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from .models import Post,Heading,PostAnalytics,Category
-from .serializers import PostSerializer,PostListSerializer,HeadingSerializer,CategorySerializer
+from django.shortcuts import get_object_or_404
+from .models import Post,Heading,PostAnalytics,Category,CategoryAnalytics
+from .serializers import PostSerializer,PostListSerializer,HeadingSerializer,CategoryListSerializer
 from .utils import get_client_ip
 from .tasks import increment_post_views_task
-
+from django.db.models import Prefetch
 from faker import Faker
 import random
 import uuid
@@ -158,35 +156,154 @@ class IncrementPostView(APIView):
             "clicks":post_analytics.clicks             
         })
 
-class CategoryListView(APIView):
-    def get(self, request, *args, **kwargs):
+class CategoryListView(StandardAPIView):
+    def get(self, request):
+
         try:
-            cache_key = "category_list_with_children"
-            cached_data = cache.get(cache_key)
+            # Parametros de solicitud
+            parent_slug = request.query_params.get("parent_slug", None)
+            ordering = request.query_params.get("ordering", None)
+            sorting = request.query_params.get("sorting", None)
+            search = request.query_params.get("search", "").strip()
+            page = request.query_params.get("p", "1")
 
-            if cached_data:
-                return Response(cached_data, status=200)
+            # Construir clave de cache para resultados paginados
+            cache_key = f"category_list:{page}:{ordering}:{sorting}:{search}:{parent_slug}"
+            cached_categories = cache.get(cache_key)
+            if cached_categories:
+                # Serializar los datos del caché
+                serialized_categories = CategoryListSerializer(cached_categories, many=True).data
+                # Incrementar impresiones en Redis para los posts del caché
+                for category in cached_categories:
+                    redis_client.incr(f"category:impressions:{category.id}")  # Usar `post.id`
+                return self.paginate(request, serialized_categories)
 
-            categories = Category.objects.filter(parent__isnull=True)
-            print(f"Root categories: {categories}")  # Debugging
+            # Consulta inicial optimizada
+            if parent_slug:
+                categories = Category.objects.filter(parent__slug=parent_slug).prefetch_related(
+                    Prefetch("category_analytics", to_attr="analytics_cache")
+                )
+            else:
+                # Si no especificamos un parent_slug buscamos las categorias padre
+                categories = Category.objects.filter(parent__isnull=True).prefetch_related(
+                    Prefetch("category_analytics", to_attr="analytics_cache")
+                )
 
             if not categories.exists():
-                raise NotFound(detail="No categories found")
+                raise NotFound(detail="No categories found.")
+            
+            # Filtrar por busqueda
+            if search != "":
+                categories = categories.filter(
+                    Q(name__icontains=search) |
+                    Q(slug__icontains=search) |
+                    Q(title__icontains=search) |
+                    Q(description__icontains=search)
+                )
+            
+            # Ordenamiento
+            if sorting:
+                if sorting == 'newest':
+                    categories = categories.order_by("-created_at")
+                elif sorting == 'recently_updated':
+                    categories = categories.order_by("-updated_at")
+                elif sorting == 'most_viewed':
+                    categories = categories.annotate(popularity=F("analytics_cache__views")).order_by("-popularity")
 
-            serialized_categories = CategorySerializer(categories, many=True).data
-            print(f"Serialized categories: {serialized_categories}") #debugging.
+            if ordering:
+                if ordering == 'az':
+                    posts = posts.order_by("name")
+                if ordering == 'za':
+                    posts = posts.order_by("-name")
 
-            for category in Category.objects.all():
-                redis_client.incr(f"category:{category.id}")
+            # Guardar los objetos en el caché
+            cache.set(cache_key, categories, timeout=60 * 5)
 
-            cache.set(cache_key, serialized_categories, timeout=60 * 5)
+            # Serializacion
+            serialized_categories = CategoryListSerializer(categories, many=True).data
 
-            return Response(serialized_categories, status=200)
+            # Incrementar impresiones en Redis
+            for category in categories:
+                redis_client.incr(f"category:impressions:{category.id}")
 
-        except NotFound as nf:
-            return Response({"detail": str(nf)}, status=404)
+            return self.paginate(request, serialized_categories)
         except Exception as e:
-            return Response({"detail": f"Internal server error: {str(e)}"}, status=500)
+                raise APIException(detail=f"An unexpected error occurred: {str(e)}")
+           
+           
+class CategoryDetailView(APIView):
+    
+    def get(self, request):
+
+        try:
+            # Obtener parametros
+            slug = request.query_params.get("slug", None)
+            page = request.query_params.get("p", "1")
+
+            if not slug:
+                return self.error("Missing slug parameter")
+            
+            # Construir cache
+            cache_key = f"category_posts:{slug}:{page}"
+            cached_posts = cache.get(cache_key)
+            if cached_posts:
+                # Serializar los datos del caché
+                serialized_posts = PostListSerializer(cached_posts, many=True).data
+                # Incrementar impresiones en Redis para los posts del caché
+                for post in cached_posts:
+                    redis_client.incr(f"post:impressions:{post.id}")  # Usar `post.id`
+                return Response(serialized_posts)
+
+            # Obtener la categoria por slug
+            category = get_object_or_404(Category, slug=slug)
+
+            # Obtener los posts que pertenecen a esta categoria
+            posts = Post.postobjects.filter(category=category).select_related("category").prefetch_related(
+                Prefetch("post_analytics", to_attr="analytics_cache")
+            )
+            
+            if not posts.exists():
+                raise NotFound(detail=f"No posts found for category '{category.name}'")
+            
+            # Guardar los objetos en el caché
+            cache.set(cache_key, posts, timeout=60 * 5)
+
+            # Serializar los posts
+            serialized_posts = PostListSerializer(posts, many=True).data
+
+            # Incrementar impresiones en Redis
+            for post in posts:
+                redis_client.incr(f"post:impressions:{post.id}")
+
+            return Response( serialized_posts)
+        except Exception as e:
+            raise APIException(detail=f"An unexpected error occurred: {str(e)}")         
+           
+           
+                     
+class IncrementCategoryClicksView(APIView):
+    
+    def post(self,request):
+        
+        
+        data=request.data
+        try:
+            category=Category.objects.get(slug=data['slug'])
+        except Category.DoesNotExist:
+            raise NotFound(detail="the requested post does not exist")
+             
+        try:
+            category_analytics, created = CategoryAnalytics.objects.get_or_create(category  =category)
+            category_analytics.increment_clicks()  # Correcto: sin argumentos adicionales
+        except Exception as e:
+            raise APIException(detail=f"An error ocurred while updating post analytics : {str(e)}")
+        return self.response({
+            "message":"click incremeted successfuly",
+            "clicks":category_analytics.clicks             
+        })           
+           
+           
+           
 class GenerateFakePostView(StandardAPIView):
     
     def get(self,request):
